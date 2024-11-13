@@ -1,27 +1,35 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net/http"
-	"os"
 	"io"
 )
 
+func URLresponse(url string, n int)  {
+	//var resp *http.Response
+	for i := 1; i <= n; i++ {
+		resp, err := http.Get(url)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		fmt.Printf("%s\n", body)
+		func () {
+			defer resp.Body.Close()
+		} ()
+	}
+}
+
 func main() {
-	arguments := os.Args
-	if len(arguments) == 1 {
-		fmt.Println("Usage: url")
-		return
-	}
-	url := arguments[1]
-
-	var resp *http.Response
-	resp, err := http.Get(url)
-	if err != nil {
-		fmt.Println(err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-
-	fmt.Printf("%s\n", body)
+	url := flag.String("url", "http://localhost:8080/", "url adress")
+	count := flag.Int("count", 1, "Number of requests")
+	flag.Parse()
+	URLresponse(*url, *count)
 }
