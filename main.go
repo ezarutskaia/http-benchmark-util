@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"io"
+	"os"
 )
 
 func URLresponse(url string, n int)  {
@@ -28,8 +29,15 @@ func URLresponse(url string, n int)  {
 }
 
 func main() {
-	url := flag.String("url", "http://localhost:8080/", "url adress")
+	url := flag.String("url", "", "url adress")
 	count := flag.Int("count", 1, "Number of requests")
 	flag.Parse()
+
+	if *url == "" {
+		fmt.Println("Error: The 'url' parameter is required.")
+		flag.Usage()
+		os.Exit(1)
+	}
+
 	URLresponse(*url, *count)
 }
