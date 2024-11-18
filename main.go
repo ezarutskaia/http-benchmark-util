@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
-	"net/http"
 	"io"
+	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -54,9 +57,50 @@ func stdOut(sliceReq []Request) {
 	}
 }
 
+func SafeLog(url string, sliceReq []Request) {
+	currentTime := time.Now()
+	timeFormat := currentTime.Format("2006-01-02_15-04-05")
+	dir := "./logs"
+	safeURL := strings.ReplaceAll(url, "/", "_")
+	safeURL = strings.ReplaceAll(safeURL, ":", "-")
+	filename := safeURL + "_" + timeFormat + ".log"
+	filePath := filepath.Join(dir, filename)
+
+	err := os.MkdirAll(dir, os.ModePerm)
+	if err != nil {
+		fmt.Println("Error create dir:", err)
+		return
+	}
+
+	file, err := os.Create(filePath)
+	if err != nil {
+		fmt.Println("Error create file:", err)
+		return
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	for _, req := range sliceReq {
+		line := fmt.Sprintf("TimeStart: %s, TimeEnd: %s, TimeDuration: %s, DataVolume: %d",
+			req.TimeStart, req.TimeEnd, req.TimeDuration, req.DataVolume)
+		_, err := writer.WriteString(line + "\n")
+		if err != nil {
+			fmt.Println("Error writing file:", err)
+			return
+		}
+	}
+
+	err = writer.Flush()
+	if err != nil {
+		fmt.Println("Error flush:", err)
+		return
+	}
+}
+
 func main() {
-	url := flag.String("url", "", "url adress")
+	url := flag.String("url", "", "Url adress")
 	count := flag.Int("count", 1, "Number of requests")
+	file := flag.Bool("file", false, "Safe log_file")
 	flag.Parse()
 
 	if *url == "" {
@@ -66,4 +110,8 @@ func main() {
 	}
 
 	URLresponse(*url, *count)
+
+	if *file == true {
+		SafeLog(*url, requests)
+	}
 }
