@@ -109,17 +109,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	wg.Add(*count)
 	switch *parallel {
 	case false:
 		for i := 1; i <= *count; i++ {
 			URLresponse(*url)
 		}
 	case true:
-		wg.Add(*count)
 		for i := 1; i <= *count; i++ {
-			func () {
+			go func () {
 				defer wg.Done()
-				go URLresponse(*url)
+				URLresponse(*url)
 			} ()
 		}
 	}
