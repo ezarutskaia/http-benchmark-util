@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,29 +22,25 @@ type Request struct {
 
 var requests []Request
 
-func URLresponse(url string, n int)  {
-	//var resp *http.Response
-	for i := 1; i <= n; i++ {
+func URLresponse(url string)  {
 		start := time.Now()
 		resp, err := http.Get(url)
 		if err != nil {
 			fmt.Println(err)
-			continue
 		}
+		defer resp.Body.Close()
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			fmt.Println(err)
-			continue
 		}
 		end := time.Now()
 		duration := end.Sub(start)
 		req := Request{start, end, duration, len(body)}
 		requests = append(requests, req)
-		func () {
-			defer resp.Body.Close()
-		} ()
-	}
-	stdOut(requests)
+}
+
+func GOresponse(url string, n int)  {
+
 }
 
 func stdOut(sliceReq []Request) {
@@ -98,9 +95,12 @@ func SafeLog(url string, sliceReq []Request) {
 }
 
 func main() {
+	var wg sync.WaitGroup
+
 	url := flag.String("url", "", "Url adress")
 	count := flag.Int("count", 1, "Number of requests")
 	file := flag.Bool("file", false, "Safe log_file")
+	parallel := flag.Bool("parallel", false, "Parallel execution of requests")
 	flag.Parse()
 
 	if *url == "" {
@@ -109,7 +109,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	URLresponse(*url, *count)
+	switch *parallel {
+	case false:
+		for i := 1; i <= *count; i++ {
+			URLresponse(*url)
+		}
+	case true:
+		wg.Add(*count)
+		for i := 1; i <= *count; i++ {
+			func () {
+				defer wg.Done()
+				go URLresponse(*url)
+			} ()
+		}
+	}
+
+	wg.Wait()
+	stdOut(requests)
 
 	if *file == true {
 		SafeLog(*url, requests)
