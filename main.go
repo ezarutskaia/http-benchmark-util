@@ -24,20 +24,20 @@ type Request struct {
 var requests []Request
 
 func URLresponse(url string, pack int)  {
-		start := time.Now()
-		resp, err := http.Get(url)
-		if err != nil {
-			fmt.Println(err)
-		}
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			fmt.Println(err)
-		}
-		end := time.Now()
-		duration := end.Sub(start)
-		req := Request{start, end, duration, len(body), pack}
-		requests = append(requests, req)
+	start := time.Now()
+	resp, err := http.Get(url)
+	if err != nil {
+		fmt.Println(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(err)
+	}
+	end := time.Now()
+	duration := end.Sub(start)
+	req := Request{start, end, duration, len(body), pack}
+	requests = append(requests, req)
 }
 
 func GOresponse(url string, n int)  {
