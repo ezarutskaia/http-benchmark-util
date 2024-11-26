@@ -18,11 +18,12 @@ type Request struct {
 	TimeEnd time.Time
 	TimeDuration time.Duration
 	DataVolume int
+	Pack int
 }
 
 var requests []Request
 
-func URLresponse(url string)  {
+func URLresponse(url string, pack int)  {
 		start := time.Now()
 		resp, err := http.Get(url)
 		if err != nil {
@@ -35,7 +36,7 @@ func URLresponse(url string)  {
 		}
 		end := time.Now()
 		duration := end.Sub(start)
-		req := Request{start, end, duration, len(body)}
+		req := Request{start, end, duration, len(body), pack}
 		requests = append(requests, req)
 }
 
@@ -45,12 +46,12 @@ func GOresponse(url string, n int)  {
 
 func stdOut(sliceReq []Request) {
 	timeFormat := "2006-01-02 15:04:05.999999999"
-	fmt.Println("TimeStart 		     TimeEnd 			 TimeDuration  	DataVolume")
-    fmt.Println("====================================================================================")
+	fmt.Println("TimeStart 		     TimeEnd 			 TimeDuration  	DataVolume	Pack")
+    fmt.Println("===============================================================================================")
 	for _, req := range sliceReq {
 		startFormat := req.TimeStart.Format(timeFormat)
 		endFormat := req.TimeEnd.Format(timeFormat)
-		fmt.Printf("%-28v %-28v %14v %10v\n", startFormat, endFormat, req.TimeDuration, req.DataVolume)
+		fmt.Printf("%-28v %-28v %14v %10v %10v\n", startFormat, endFormat, req.TimeDuration, req.DataVolume, req.Pack)
 	}
 }
 
@@ -78,8 +79,8 @@ func SafeLog(url string, sliceReq []Request) {
 
 	writer := bufio.NewWriter(file)
 	for _, req := range sliceReq {
-		line := fmt.Sprintf("TimeStart: %s, TimeEnd: %s, TimeDuration: %s, DataVolume: %d",
-			req.TimeStart, req.TimeEnd, req.TimeDuration, req.DataVolume)
+		line := fmt.Sprintf("TimeStart: %s, TimeEnd: %s, TimeDuration: %s, DataVolume: %d, Pack: %d",
+			req.TimeStart, req.TimeEnd, req.TimeDuration, req.DataVolume, req.Pack)
 		_, err := writer.WriteString(line + "\n")
 		if err != nil {
 			fmt.Println("Error writing file:", err)
@@ -99,6 +100,7 @@ func main() {
 
 	url := flag.String("url", "", "Url adress")
 	count := flag.Int("count", 1, "Number of requests")
+	bunch := flag.Int("bunch", 1, "Number of package splits, Parallel execution only")
 	file := flag.Bool("file", false, "Safe log_file")
 	parallel := flag.Bool("parallel", false, "Parallel execution of requests")
 	flag.Parse()
@@ -109,22 +111,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	wg.Add(*count)
 	switch *parallel {
 	case false:
 		for i := 1; i <= *count; i++ {
-			URLresponse(*url)
+			URLresponse(*url, 1)
 		}
 	case true:
-		for i := 1; i <= *count; i++ {
-			go func () {
-				defer wg.Done()
-				URLresponse(*url)
-			} ()
+		for start := 0; start < *count; start += *bunch {
+			end := start + *bunch
+			if end > *count {
+				end = *count
+			}
+
+			for i := start; i < end; i++ {
+				wg.Add(1)
+				go func () {
+					defer wg.Done()
+					URLresponse(*url, start)
+				} ()
+			}
+			wg.Wait()
 		}
 	}
 
-	wg.Wait()
 	stdOut(requests)
 
 	if *file == true {
