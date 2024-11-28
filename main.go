@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ type Request struct {
 }
 
 var requests []Request
+var mu sync.Mutex
 
 func URLresponse(url string, pack int)  {
 	start := time.Now()
@@ -36,12 +38,44 @@ func URLresponse(url string, pack int)  {
 	}
 	end := time.Now()
 	duration := end.Sub(start)
-	req := Request{start, end, duration, len(body), pack}
-	requests = append(requests, req)
+	result := Request{start, end, duration, len(body), pack}
+	mu.Lock()
+	requests = append(requests, result)
+	mu.Unlock()
 }
 
-func GOresponse(url string, n int)  {
+func URLresponseTimeout(ctx context.Context,url string, pack int)  {
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		fmt.Println(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Println(err)
+	}
+	defer func() {
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}()
 
+	select {
+	case <-ctx.Done():
+		fmt.Printf("Package: %d - Context cancelled: %v\n", pack, ctx.Err())
+		return
+	default:
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Println(err)
+		}
+		end := time.Now()
+		duration := end.Sub(start)
+		result := Request{start, end, duration, len(body), pack}
+		mu.Lock()
+		requests = append(requests, result)
+		mu.Unlock()
+	}
 }
 
 func stdOut(sliceReq []Request) {
@@ -103,6 +137,7 @@ func main() {
 	bunch := flag.Int("bunch", 1, "Number of package splits, Parallel execution only")
 	file := flag.Bool("file", false, "Safe log_file")
 	parallel := flag.Bool("parallel", false, "Parallel execution of requests")
+	timeout := flag.Int("timeout", 0, "Number of seconds of waiting for response")
 	flag.Parse()
 
 	if *url == "" {
@@ -110,6 +145,10 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
+
+	duration := time.Duration(*timeout) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), duration)
+	defer cancel()
 
 	switch *parallel {
 	case false:
@@ -125,10 +164,17 @@ func main() {
 
 			for i := start; i < end; i++ {
 				wg.Add(1)
-				go func () {
-					defer wg.Done()
-					URLresponse(*url, start)
-				} ()
+				if *timeout == 0 {
+					go func () {
+						defer wg.Done()
+						URLresponse(*url, start)
+					} ()
+				} else {
+					go func () {
+						defer wg.Done()
+						URLresponseTimeout(ctx, *url, start)
+					} ()
+				}
 			}
 			wg.Wait()
 		}
