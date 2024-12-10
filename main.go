@@ -22,16 +22,23 @@ type Request struct {
 	Pack int
 }
 
+const serverFallDown = "Server returnd status 500"
 var requests []Request
+var wg sync.WaitGroup
 var mu sync.Mutex
 
-func URLresponse(url string, pack int)  {
+func URLresponse(url string, pack int) error {
 	start := time.Now()
 	resp, err := http.Get(url)
 	if err != nil {
-		fmt.Println(err)
+		return fmt.Errorf("Request %d done with error: %v", pack, err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf(serverFallDown)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println(err)
@@ -42,6 +49,7 @@ func URLresponse(url string, pack int)  {
 	mu.Lock()
 	requests = append(requests, result)
 	mu.Unlock()
+	return nil
 }
 
 func URLresponseTimeout(ctx context.Context,url string, pack int)  {
@@ -130,14 +138,14 @@ func SafeLog(url string, sliceReq []Request) {
 }
 
 func main() {
-	var wg sync.WaitGroup
-
 	url := flag.String("url", "", "Url adress")
 	count := flag.Int("count", 1, "Number of requests")
 	bunch := flag.Int("bunch", 1, "Number of package splits, Parallel execution only")
 	file := flag.Bool("file", false, "Safe log_file")
 	parallel := flag.Bool("parallel", false, "Parallel execution of requests")
 	timeout := flag.Int("timeout", 0, "Number of seconds of waiting for response")
+	kill := flag.Bool("kill", false, "kill server")
+
 	flag.Parse()
 
 	if *url == "" {
@@ -150,33 +158,68 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
 
+	if *kill == true {
+		*parallel = true
+	//	*bunch = 10
+	}
+
 	switch *parallel {
 	case false:
 		for i := 1; i <= *count; i++ {
-			URLresponse(*url, 1)
+		    if err := URLresponse(*url, 1); err != nil {
+	        	fmt.Println("Error:", err)
+	    	}
 		}
 	case true:
-		for start := 0; start < *count; start += *bunch {
-			end := start + *bunch
-			if end > *count {
-				end = *count
-			}
+		if *kill == false {
+			for start := 0; start < *count; start += *bunch {
+				end := start + *bunch
+				if end > *count {
+					end = *count
+				}
 
-			for i := start; i < end; i++ {
-				wg.Add(1)
-				if *timeout == 0 {
-					go func () {
+				for i := start; i < end; i++ {
+					wg.Add(1)
+					if *timeout == 0 {
+						go func () {
+							defer wg.Done()
+							if err := URLresponse(*url, 1); err != nil {
+								fmt.Println("Error:", err)
+							}
+						} ()
+					} else {
+						go func (start int) {
+							defer wg.Done()
+							URLresponseTimeout(ctx, *url, start)
+						} (start)
+					}
+				}
+				wg.Wait()
+			}
+		} else {
+			stop := make(chan struct{})
+			i := 0
+			outerLoop: for {
+				select {
+				case <-stop:
+					fmt.Println("Stopping testing: server returned 500")
+					break outerLoop
+				default:
+					i++
+					wg.Add(1)
+					go func(i int, stop chan struct{}) {
+						fmt.Println("start goroutine", i)
 						defer wg.Done()
-						URLresponse(*url, start)
-					} ()
-				} else {
-					go func () {
-						defer wg.Done()
-						URLresponseTimeout(ctx, *url, start)
-					} ()
+						err := URLresponse(*url, i)
+						if err != nil && err.Error() == serverFallDown {
+							fmt.Printf("Error 500 received on request %d. Stopping all tests. Error %v\n", i, err)
+							close(stop)
+						}
+					}(i, stop)
+
+					wg.Wait()
 				}
 			}
-			wg.Wait()
 		}
 	}
 
