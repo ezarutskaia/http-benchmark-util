@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,32 +29,36 @@ var requests []Request
 var wg sync.WaitGroup
 var mu sync.Mutex
 
-var data []byte
+var jsonFile = "data.json"
 
-var directory = "./http-benchmark-util"
+func readJSONFile(filepath string) (map[string]interface{}, error) {
+	_, err := os.Stat(filepath)
+	if err != nil {
+		return nil, fmt.Errorf("file does not exist: %w", err)
+	}
 
-func findJSONFiles(dir string) ([]string, error) {
-	var files []string
+	f, err := os.Open(filepath)
+	if err != nil {
+		return nil, fmt.Errorf("unable to open file: %w", err)
+	}
+	defer f.Close()
 
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && filepath.Ext(d.Name()) == ".json" {
-			files = append(files, path)
-		}
-		return nil
-	})
+	var data map[string]interface{}
+	decoder := json.NewDecoder(f)
+	err = decoder.Decode(&data)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding JSON: %w", err)
+	}
 
-	return files, err
+	return data, nil
 }
 
-func URLresponse(url string, pack int, jsonData []byte) error {
+func URLresponse(url string, pack int, data interface{}) error {
 	start := time.Now()
-	var tmp interface{}
 
-	if err := json.Unmarshal(jsonData, &tmp); err != nil {
-		return fmt.Errorf("incorrect JSON: %w", err)
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("error marshaling JSON: %w", err)
 	}
 
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
@@ -81,12 +84,12 @@ func URLresponse(url string, pack int, jsonData []byte) error {
 	return nil
 }
 
-func URLresponseTimeout(ctx context.Context,url string, pack int, jsonData []byte)  error{
+func URLresponseTimeout(ctx context.Context,url string, pack int, data interface{})  error{
 	start := time.Now()
-	var tmp interface{}
 
-	if err := json.Unmarshal(jsonData, &tmp); err != nil {
-		return fmt.Errorf("incorrect JSON: %w", err)
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("error marshaling JSON: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
@@ -192,24 +195,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	objects, err := findJSONFiles(directory)
-	if err != nil {
-		fmt.Printf("Error searching files: %v\n", err)
-		//return
-	}
-	if len(objects) == 0 {
-		data = []byte{}
-		fmt.Println("JSON-files not found.")
-	} else {
-		for _, object := range objects {
-			data, err = os.ReadFile(object)
-			if err != nil {
-				fmt.Printf("Ошибка при чтении файла: %v\n", err)
-				continue
-			}
-		}
-	}
-
 	duration := time.Duration(*timeout) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
@@ -219,10 +204,15 @@ func main() {
 	//	*bunch = 10
 	}
 
+	jsonData, err := readJSONFile(jsonFile)
+	if err != nil {
+		fmt.Printf("Error reading JSON file: %v\n", err)
+	}
+
 	switch *parallel {
 	case false:
 		for i := 1; i <= *count; i++ {
-		    if err := URLresponse(*url, 1, data); err != nil {
+		    if err := URLresponse(*url, 1, jsonData); err != nil {
 	        	fmt.Println("Error:", err)
 	    	}
 		}
@@ -239,14 +229,14 @@ func main() {
 					if *timeout == 0 {
 						go func () {
 							defer wg.Done()
-							if err := URLresponse(*url, 1, data); err != nil {
+							if err := URLresponse(*url, 1, jsonData); err != nil {
 								fmt.Println("Error:", err)
 							}
 						} ()
 					} else {
 						go func (start int) {
 							defer wg.Done()
-							if err := URLresponseTimeout(ctx, *url, start, data); err != nil {
+							if err := URLresponseTimeout(ctx, *url, start, jsonData); err != nil {
 								fmt.Println("Error:", err)
 							}
 						} (start)
@@ -268,7 +258,7 @@ func main() {
 					go func(i int, stop chan struct{}) {
 						fmt.Println("start goroutine", i)
 						defer wg.Done()
-						err := URLresponse(*url, i, data)
+						err := URLresponse(*url, i, jsonData)
 						if err != nil && err.Error() == serverFallDown {
 							fmt.Printf("Error 500 received on request %d. Stopping all tests. Error %v\n", i, err)
 							close(stop)
