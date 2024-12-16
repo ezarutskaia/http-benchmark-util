@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -22,16 +24,46 @@ type Request struct {
 	Pack int
 }
 
-const serverFallDown = "Server returnd status 500"
+const serverFallDown = "server returnd status 500"
 var requests []Request
 var wg sync.WaitGroup
 var mu sync.Mutex
 
-func URLresponse(url string, pack int) error {
-	start := time.Now()
-	resp, err := http.Get(url)
+var jsonFile = "data.json"
+
+func readJSONFile(filepath string) (map[string]interface{}, error) {
+	_, err := os.Stat(filepath)
 	if err != nil {
-		return fmt.Errorf("Request %d done with error: %v", pack, err)
+		return nil, fmt.Errorf("file does not exist: %w", err)
+	}
+
+	f, err := os.Open(filepath)
+	if err != nil {
+		return nil, fmt.Errorf("unable to open file: %w", err)
+	}
+	defer f.Close()
+
+	var data map[string]interface{}
+	decoder := json.NewDecoder(f)
+	err = decoder.Decode(&data)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding JSON: %w", err)
+	}
+
+	return data, nil
+}
+
+func URLresponse(url string, pack int, data interface{}) error {
+	start := time.Now()
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("error marshaling JSON: %w", err)
+	}
+
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("request %d done with error: %v", pack, err)
 	}
 	defer resp.Body.Close()
 
@@ -52,15 +84,23 @@ func URLresponse(url string, pack int) error {
 	return nil
 }
 
-func URLresponseTimeout(ctx context.Context,url string, pack int)  {
+func URLresponseTimeout(ctx context.Context,url string, pack int, data interface{})  error{
 	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+
+	jsonData, err := json.Marshal(data)
 	if err != nil {
-		fmt.Println(err)
+		return fmt.Errorf("error marshaling JSON: %w", err)
 	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		fmt.Println(err)
+		return err
 	}
 	defer func() {
 		if resp != nil {
@@ -71,11 +111,11 @@ func URLresponseTimeout(ctx context.Context,url string, pack int)  {
 	select {
 	case <-ctx.Done():
 		fmt.Printf("Package: %d - Context cancelled: %v\n", pack, ctx.Err())
-		return
+		return nil
 	default:
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			fmt.Println(err)
+			return err
 		}
 		end := time.Now()
 		duration := end.Sub(start)
@@ -84,12 +124,13 @@ func URLresponseTimeout(ctx context.Context,url string, pack int)  {
 		requests = append(requests, result)
 		mu.Unlock()
 	}
+	return nil
 }
 
 func stdOut(sliceReq []Request) {
 	timeFormat := "2006-01-02 15:04:05.999999999"
-	fmt.Println("TimeStart 		     TimeEnd 			 TimeDuration  	DataVolume	Pack")
-    fmt.Println("===============================================================================================")
+	fmt.Printf("%-28v %-28v %14v %10v %10v\n","TimeStart", "TimeEnd", "TimeDuration", "DataVolume", "Pack")
+
 	for _, req := range sliceReq {
 		startFormat := req.TimeStart.Format(timeFormat)
 		endFormat := req.TimeEnd.Format(timeFormat)
@@ -163,10 +204,15 @@ func main() {
 	//	*bunch = 10
 	}
 
+	jsonData, err := readJSONFile(jsonFile)
+	if err != nil {
+		fmt.Printf("Error reading JSON file: %v\n", err)
+	}
+
 	switch *parallel {
 	case false:
 		for i := 1; i <= *count; i++ {
-		    if err := URLresponse(*url, 1); err != nil {
+		    if err := URLresponse(*url, 1, jsonData); err != nil {
 	        	fmt.Println("Error:", err)
 	    	}
 		}
@@ -183,14 +229,16 @@ func main() {
 					if *timeout == 0 {
 						go func () {
 							defer wg.Done()
-							if err := URLresponse(*url, 1); err != nil {
+							if err := URLresponse(*url, 1, jsonData); err != nil {
 								fmt.Println("Error:", err)
 							}
 						} ()
 					} else {
 						go func (start int) {
 							defer wg.Done()
-							URLresponseTimeout(ctx, *url, start)
+							if err := URLresponseTimeout(ctx, *url, start, jsonData); err != nil {
+								fmt.Println("Error:", err)
+							}
 						} (start)
 					}
 				}
@@ -210,7 +258,7 @@ func main() {
 					go func(i int, stop chan struct{}) {
 						fmt.Println("start goroutine", i)
 						defer wg.Done()
-						err := URLresponse(*url, i)
+						err := URLresponse(*url, i, jsonData)
 						if err != nil && err.Error() == serverFallDown {
 							fmt.Printf("Error 500 received on request %d. Stopping all tests. Error %v\n", i, err)
 							close(stop)
